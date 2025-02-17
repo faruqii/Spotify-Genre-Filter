@@ -21,9 +21,6 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	// Print config
-	fmt.Printf("ClientID: %s\nClientSecret: %s\nRedirectURI: %s\n", cfg.ClientID, cfg.ClientSecret, cfg.RedirectURI)
-
 	// Authenticate with Spotify
 	client, err := auth.Authenticate(cfg.ClientID, cfg.ClientSecret, cfg.RedirectURI)
 	if err != nil {
@@ -45,7 +42,7 @@ func main() {
 
 	// Create playlist
 	playlistName := genre + " playlist"
-	err = spotify.CreatePlaylist(client, playlistName, filteredTrackIDs)
+	err = spotify.CreateOrUpdatePlaylist(client, playlistName, filteredTrackIDs)
 	if err != nil {
 		log.Fatalf("failed to create playlist: %v", err)
 	}

@@ -44,9 +44,6 @@ func GetLikedSongs(client *http.Client) ([]Track, error) {
 			return nil, fmt.Errorf("failed to read response body: %v", err)
 		}
 
-		// Log the raw response for debugging
-		log.Printf("Raw API response: %s", string(body))
-
 		// Check if the response is an error
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("API returned non-200 status: %d, response: %s", resp.StatusCode, string(body))
@@ -87,9 +84,6 @@ func GetArtistDetails(client *http.Client, artistID string) (*Artist, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read artist details response: %v", err)
 	}
-
-	// Log the raw response for debugging
-	log.Printf("Raw artist details response: %s", string(body))
 
 	var artist Artist
 	if err := json.Unmarshal(body, &artist); err != nil {
@@ -145,6 +139,7 @@ func CreatePlaylist(client *http.Client, name string, trackIDs []string) error {
 		"description": "Created by Spotify Playlist Manager",
 		"public":      false,
 	}
+
 	playlistBody, err := json.Marshal(playlistData)
 	if err != nil {
 		return fmt.Errorf("failed to marshal playlist data: %v", err)
@@ -199,4 +194,97 @@ func CreatePlaylist(client *http.Client, name string, trackIDs []string) error {
 	log.Printf("Add tracks response: %s", string(body))
 
 	return nil
+}
+
+// FindExistingPlaylist checks if a playlist with the same name exists
+func FindExistingPlaylist(client *http.Client, name string) (string, error) {
+	userResp, err := client.Get("https://api.spotify.com/v1/me")
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch user details: %v", err)
+	}
+	defer userResp.Body.Close()
+
+	var user struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(userResp.Body).Decode(&user); err != nil {
+		return "", fmt.Errorf("failed to unmarshal user details: %v", err)
+	}
+
+	url := fmt.Sprintf("https://api.spotify.com/v1/users/%s/playlists?limit=50", user.ID)
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch playlists: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var playlists struct {
+		Items []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&playlists); err != nil {
+		return "", fmt.Errorf("failed to unmarshal playlists: %v", err)
+	}
+
+	for _, p := range playlists.Items {
+		if p.Name == name {
+			return p.ID, nil // Return existing playlist ID
+		}
+	}
+	return "", nil // No existing playlist found
+}
+
+// AddTracksToPlaylist adds tracks to an existing playlist
+func AddTracksToPlaylist(client *http.Client, playlistID string, trackIDs []string) error {
+	trackURIs := make([]string, len(trackIDs))
+	for i, id := range trackIDs {
+		trackURIs[i] = fmt.Sprintf("spotify:track:%s", id)
+	}
+
+	addTracksData := map[string]interface{}{
+		"uris": trackURIs,
+	}
+	addTracksBody, err := json.Marshal(addTracksData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal track URIs: %v", err)
+	}
+
+	url := fmt.Sprintf("https://api.spotify.com/v1/playlists/%s/tracks", playlistID)
+	req, err := http.NewRequest("POST", url, bytes.NewReader(addTracksBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to add tracks to playlist: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to add tracks, status: %d, response: %s", resp.StatusCode, string(body))
+	}
+
+	log.Printf("Tracks added successfully to playlist %s", playlistID)
+	return nil
+}
+
+// CreateOrUpdatePlaylist checks for an existing playlist and updates it, otherwise creates a new one
+func CreateOrUpdatePlaylist(client *http.Client, name string, trackIDs []string) error {
+	playlistID, err := FindExistingPlaylist(client, name)
+	if err != nil {
+		return err
+	}
+
+	if playlistID != "" {
+		log.Printf("Updating existing playlist: %s", name)
+		return AddTracksToPlaylist(client, playlistID, trackIDs)
+	}
+
+	// If no existing playlist, create a new one
+	return CreatePlaylist(client, name, trackIDs)
 }
